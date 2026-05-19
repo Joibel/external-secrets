@@ -24,6 +24,12 @@ type itemListResponse struct {
 	Items []item `json:"items"`
 }
 
+// itemViewResponse represents the response from pass-cli item view --output json.
+// pass-cli 2.0.2 wraps the item alongside an attachments array.
+type itemViewResponse struct {
+	Item item `json:"item"`
+}
+
 // item represents a Proton Pass item from the CLI output.
 type item struct {
 	ID         string      `json:"id"`

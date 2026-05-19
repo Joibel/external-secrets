@@ -91,11 +91,14 @@ On eviction the provider logs out and removes the on-disk session directory.
 
 ### Authentication
 
-Proton Pass supports three authentication methods:
+Proton Pass supports the following authentication methods:
 
 1. **Password only** - no 2FA
 2. **Password + TOTP** - TOTP-based 2FA
 3. **Password + Extra Password** - extra password configured in Proton
+4. **Personal Access Token (PAT)** - a Proton Pass PAT minted in the Proton web UI
+
+Exactly one of `auth.secretRef` (methods 1–3) or `auth.pat` (method 4) must be set.
 
 #### Setting up TOTP Secret
 
@@ -117,6 +120,28 @@ If you already have 2FA configured, some authenticator apps (Aegis, andOTP) can 
 !!! note
     Use the raw base32 secret key, not the full `otpauth://` URI.
 
+#### Using a Personal Access Token
+
+To use a PAT instead of an account password, mint one from the Proton Pass web UI (Settings → Personal Access Tokens) and store it in a Kubernetes Secret. Reference it via `auth.pat`:
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: protonpass
+spec:
+  provider:
+    protonpass:
+      vault: "Personal"
+      # username is optional when using a PAT
+      auth:
+        pat:
+          name: protonpass-credentials
+          key: pat
+```
+
+The PAT is passed to `pass-cli` via the `PROTON_PASS_PERSONAL_ACCESS_TOKEN` environment variable, so it never appears in the process argument list. When PAT auth is used, `totp` and `extraPassword` are not consulted.
+
 ### Creating the Credentials Secret
 
 Create a Secret with your Proton credentials:
@@ -135,11 +160,14 @@ For accounts without 2FA, you can omit the `totp-secret` key.
 
 | Field | Description | Required |
 |-------|-------------|----------|
-| `username` | Your Proton account email | Yes |
+| `username` | Your Proton account email | Yes (for `secretRef` auth); optional for `pat` auth |
 | `vault` | Name of the Proton Pass vault to use | Yes |
-| `auth.secretRef.password` | Reference to the password secret | Yes |
+| `auth.secretRef.password` | Reference to the password secret | Yes (when using `secretRef`) |
 | `auth.secretRef.totp` | Reference to the TOTP secret for 2FA | No |
 | `auth.secretRef.extraPassword` | Reference to an extra password | No |
+| `auth.pat` | Reference to a Proton Pass Personal Access Token | Yes (when using `pat`) |
+
+Exactly one of `auth.secretRef` or `auth.pat` must be set.
 
 ### Fetching Secrets
 

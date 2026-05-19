@@ -75,8 +75,9 @@ func TestValidateStore(t *testing.T) {
 				Spec: esv1.SecretStoreSpec{
 					Provider: &esv1.SecretStoreProvider{
 						ProtonPass: &esv1.ProtonPassProvider{
+							Vault: "my-vault",
 							Auth: &esv1.ProtonPassAuth{
-								SecretRef: esv1.ProtonPassAuthSecretRef{
+								SecretRef: &esv1.ProtonPassAuthSecretRef{
 									Password: esmeta.SecretKeySelector{
 										Name: "secret",
 										Key:  "password",
@@ -98,7 +99,7 @@ func TestValidateStore(t *testing.T) {
 						ProtonPass: &esv1.ProtonPassProvider{
 							Username: "user@example.com",
 							Auth: &esv1.ProtonPassAuth{
-								SecretRef: esv1.ProtonPassAuthSecretRef{
+								SecretRef: &esv1.ProtonPassAuthSecretRef{
 									Password: esmeta.SecretKeySelector{
 										Name: "secret",
 										Key:  "password",
@@ -121,7 +122,7 @@ func TestValidateStore(t *testing.T) {
 							Username: "user@example.com",
 							Vault:    "my-vault",
 							Auth: &esv1.ProtonPassAuth{
-								SecretRef: esv1.ProtonPassAuthSecretRef{
+								SecretRef: &esv1.ProtonPassAuthSecretRef{
 									Password: esmeta.SecretKeySelector{
 										Key: "password",
 									},
@@ -143,7 +144,7 @@ func TestValidateStore(t *testing.T) {
 							Username: "user@example.com",
 							Vault:    "my-vault",
 							Auth: &esv1.ProtonPassAuth{
-								SecretRef: esv1.ProtonPassAuthSecretRef{
+								SecretRef: &esv1.ProtonPassAuthSecretRef{
 									Password: esmeta.SecretKeySelector{
 										Name: "secret",
 									},
@@ -169,7 +170,7 @@ func TestValidateStore(t *testing.T) {
 							Username: "user@example.com",
 							Vault:    "my-vault",
 							Auth: &esv1.ProtonPassAuth{
-								SecretRef: esv1.ProtonPassAuthSecretRef{
+								SecretRef: &esv1.ProtonPassAuthSecretRef{
 									Password: esmeta.SecretKeySelector{
 										Name: "secret",
 										Key:  "password",
@@ -195,7 +196,7 @@ func TestValidateStore(t *testing.T) {
 							Username: "user@example.com",
 							Vault:    "my-vault",
 							Auth: &esv1.ProtonPassAuth{
-								SecretRef: esv1.ProtonPassAuthSecretRef{
+								SecretRef: &esv1.ProtonPassAuthSecretRef{
 									Password: esmeta.SecretKeySelector{
 										Name: "secret",
 										Key:  "password",
@@ -215,6 +216,110 @@ func TestValidateStore(t *testing.T) {
 				},
 			},
 			wantErr: false,
+		},
+		{
+			name: "valid PAT config without username",
+			store: &esv1.SecretStore{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-store",
+					Namespace: "default",
+				},
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						ProtonPass: &esv1.ProtonPassProvider{
+							Vault: "my-vault",
+							Auth: &esv1.ProtonPassAuth{
+								PAT: &esmeta.SecretKeySelector{
+									Name: "secret",
+									Key:  "pat",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "PAT missing name",
+			store: &esv1.SecretStore{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						ProtonPass: &esv1.ProtonPassProvider{
+							Vault: "my-vault",
+							Auth: &esv1.ProtonPassAuth{
+								PAT: &esmeta.SecretKeySelector{
+									Key: "pat",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: errProtonPassStoreMissingPATRefName,
+		},
+		{
+			name: "PAT missing key",
+			store: &esv1.SecretStore{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						ProtonPass: &esv1.ProtonPassProvider{
+							Vault: "my-vault",
+							Auth: &esv1.ProtonPassAuth{
+								PAT: &esmeta.SecretKeySelector{
+									Name: "secret",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: errProtonPassStoreMissingPATRefKey,
+		},
+		{
+			name: "neither secretRef nor PAT set",
+			store: &esv1.SecretStore{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						ProtonPass: &esv1.ProtonPassProvider{
+							Username: "user@example.com",
+							Vault:    "my-vault",
+							Auth:     &esv1.ProtonPassAuth{},
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: errProtonPassStoreAuthOneOf,
+		},
+		{
+			name: "both secretRef and PAT set",
+			store: &esv1.SecretStore{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						ProtonPass: &esv1.ProtonPassProvider{
+							Username: "user@example.com",
+							Vault:    "my-vault",
+							Auth: &esv1.ProtonPassAuth{
+								SecretRef: &esv1.ProtonPassAuthSecretRef{
+									Password: esmeta.SecretKeySelector{
+										Name: "secret",
+										Key:  "password",
+									},
+								},
+								PAT: &esmeta.SecretKeySelector{
+									Name: "secret",
+									Key:  "pat",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: errProtonPassStoreAuthOneOf,
 		},
 	}
 

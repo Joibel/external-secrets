@@ -21,9 +21,20 @@ import (
 )
 
 // ProtonPassAuth contains authentication configuration for Proton Pass.
+// Exactly one of secretRef or pat must be set.
+// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:MaxProperties=1
 type ProtonPassAuth struct {
-	// SecretRef contains the secret references for authentication.
-	SecretRef ProtonPassAuthSecretRef `json:"secretRef"`
+	// SecretRef configures username/password authentication (optionally with TOTP
+	// and/or an extra password).
+	// +optional
+	SecretRef *ProtonPassAuthSecretRef `json:"secretRef,omitempty"`
+
+	// PAT is a reference to a Proton Pass Personal Access Token.
+	// When set, TOTP and the extra password are not used and the username field
+	// on the provider is optional.
+	// +optional
+	PAT *esmeta.SecretKeySelector `json:"pat,omitempty"`
 }
 
 // ProtonPassAuthSecretRef contains the secret references for Proton Pass authentication.
@@ -47,7 +58,9 @@ type ProtonPassProvider struct {
 	Auth *ProtonPassAuth `json:"auth"`
 
 	// Username is the Proton account username (email).
-	Username string `json:"username"`
+	// Required when using secretRef authentication; optional (and unused) when using PAT.
+	// +optional
+	Username string `json:"username,omitempty"`
 
 	// Vault is the name of the Proton Pass vault to use.
 	Vault string `json:"vault"`

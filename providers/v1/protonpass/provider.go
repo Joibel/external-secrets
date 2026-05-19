@@ -63,9 +63,12 @@ const (
 	errProtonPassStoreNilSpecProvider           = "nil spec.provider"
 	errProtonPassStoreNilSpecProviderProtonPass = "nil spec.provider.protonpass"
 	errProtonPassStoreNilAuth                   = "nil spec.provider.protonpass.auth"
+	errProtonPassStoreAuthOneOf                 = "exactly one of spec.provider.protonpass.auth.secretRef or spec.provider.protonpass.auth.pat must be set"
 	errProtonPassStoreMissingUsername           = "missing: spec.provider.protonpass.username"
 	errProtonPassStoreMissingPasswordRefName    = "missing: spec.provider.protonpass.auth.secretRef.password.name"
 	errProtonPassStoreMissingPasswordRefKey     = "missing: spec.provider.protonpass.auth.secretRef.password.key"
+	errProtonPassStoreMissingPATRefName         = "missing: spec.provider.protonpass.auth.pat.name"
+	errProtonPassStoreMissingPATRefKey          = "missing: spec.provider.protonpass.auth.pat.key"
 	errProtonPassStoreMissingVault              = "missing: spec.provider.protonpass.vault"
 )
 
@@ -94,46 +97,65 @@ func (p *provider) NewClient(ctx context.Context, store esv1.GenericStore, kube 
 
 	config := store.GetSpec().Provider.ProtonPass
 
-	// Resolve password
-	password, err := resolvers.SecretKeyRef(
-		ctx,
-		kube,
-		store.GetKind(),
-		namespace,
-		&config.Auth.SecretRef.Password,
+	var (
+		password      string
+		totpSecret    string
+		extraPassword string
+		pat           string
+		err           error
 	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve password: %w", err)
-	}
 
-	// Resolve optional TOTP secret
-	var totpSecret string
-	if config.Auth.SecretRef.TOTP != nil {
-		totpSecret, err = resolvers.SecretKeyRef(
+	switch {
+	case config.Auth.PAT != nil:
+		pat, err = resolvers.SecretKeyRef(
 			ctx,
 			kube,
 			store.GetKind(),
 			namespace,
-			config.Auth.SecretRef.TOTP,
+			config.Auth.PAT,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to resolve TOTP secret: %w", err)
+			return nil, fmt.Errorf("failed to resolve PAT: %w", err)
 		}
-	}
-
-	// Resolve optional extra password
-	var extraPassword string
-	if config.Auth.SecretRef.ExtraPassword != nil {
-		extraPassword, err = resolvers.SecretKeyRef(
+	case config.Auth.SecretRef != nil:
+		password, err = resolvers.SecretKeyRef(
 			ctx,
 			kube,
 			store.GetKind(),
 			namespace,
-			config.Auth.SecretRef.ExtraPassword,
+			&config.Auth.SecretRef.Password,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to resolve extra password: %w", err)
+			return nil, fmt.Errorf("failed to resolve password: %w", err)
 		}
+
+		if config.Auth.SecretRef.TOTP != nil {
+			totpSecret, err = resolvers.SecretKeyRef(
+				ctx,
+				kube,
+				store.GetKind(),
+				namespace,
+				config.Auth.SecretRef.TOTP,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve TOTP secret: %w", err)
+			}
+		}
+
+		if config.Auth.SecretRef.ExtraPassword != nil {
+			extraPassword, err = resolvers.SecretKeyRef(
+				ctx,
+				kube,
+				store.GetKind(),
+				namespace,
+				config.Auth.SecretRef.ExtraPassword,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve extra password: %w", err)
+			}
+		}
+	default:
+		return nil, errors.New(errProtonPassStoreAuthOneOf)
 	}
 
 	// Use a deterministic directory per store so that concurrent
@@ -147,7 +169,7 @@ func (p *provider) NewClient(ctx context.Context, store esv1.GenericStore, kube 
 	cliRegistryMu.Lock()
 	cli, exists := cliRegistry[homeDir]
 	if !exists {
-		cli = newCLI(config.Username, password, totpSecret, extraPassword, config.Vault, homeDir)
+		cli = newCLI(config.Username, password, totpSecret, extraPassword, pat, config.Vault, homeDir)
 		cliRegistry[homeDir] = cli
 	}
 	cliRegistryMu.Unlock()
@@ -234,31 +256,49 @@ func (p *provider) ValidateStore(store esv1.GenericStore) (admission.Warnings, e
 	if config.Auth == nil {
 		return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreNilAuth))
 	}
-	if config.Username == "" {
-		return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreMissingUsername))
-	}
 	if config.Vault == "" {
 		return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreMissingVault))
 	}
-	if config.Auth.SecretRef.Password.Name == "" {
-		return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreMissingPasswordRefName))
-	}
-	if config.Auth.SecretRef.Password.Key == "" {
-		return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreMissingPasswordRefKey))
+
+	hasSecretRef := config.Auth.SecretRef != nil
+	hasPAT := config.Auth.PAT != nil
+	if hasSecretRef == hasPAT {
+		return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreAuthOneOf))
 	}
 
-	// Validate secret selectors
-	if err := esutils.ValidateSecretSelector(store, config.Auth.SecretRef.Password); err != nil {
-		return nil, fmt.Errorf(errProtonPassStore, err)
-	}
-	if config.Auth.SecretRef.TOTP != nil {
-		if err := esutils.ValidateSecretSelector(store, *config.Auth.SecretRef.TOTP); err != nil {
+	switch {
+	case hasPAT:
+		if config.Auth.PAT.Name == "" {
+			return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreMissingPATRefName))
+		}
+		if config.Auth.PAT.Key == "" {
+			return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreMissingPATRefKey))
+		}
+		if err := esutils.ValidateSecretSelector(store, *config.Auth.PAT); err != nil {
 			return nil, fmt.Errorf(errProtonPassStore, err)
 		}
-	}
-	if config.Auth.SecretRef.ExtraPassword != nil {
-		if err := esutils.ValidateSecretSelector(store, *config.Auth.SecretRef.ExtraPassword); err != nil {
+	case hasSecretRef:
+		if config.Username == "" {
+			return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreMissingUsername))
+		}
+		if config.Auth.SecretRef.Password.Name == "" {
+			return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreMissingPasswordRefName))
+		}
+		if config.Auth.SecretRef.Password.Key == "" {
+			return nil, fmt.Errorf(errProtonPassStore, errors.New(errProtonPassStoreMissingPasswordRefKey))
+		}
+		if err := esutils.ValidateSecretSelector(store, config.Auth.SecretRef.Password); err != nil {
 			return nil, fmt.Errorf(errProtonPassStore, err)
+		}
+		if config.Auth.SecretRef.TOTP != nil {
+			if err := esutils.ValidateSecretSelector(store, *config.Auth.SecretRef.TOTP); err != nil {
+				return nil, fmt.Errorf(errProtonPassStore, err)
+			}
+		}
+		if config.Auth.SecretRef.ExtraPassword != nil {
+			if err := esutils.ValidateSecretSelector(store, *config.Auth.SecretRef.ExtraPassword); err != nil {
+				return nil, fmt.Errorf(errProtonPassStore, err)
+			}
 		}
 	}
 

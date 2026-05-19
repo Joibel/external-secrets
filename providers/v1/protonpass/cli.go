@@ -52,6 +52,7 @@ type cli struct {
 	password      string
 	totpSecret    string
 	extraPassword string
+	pat           string
 	vault         string
 	homeDir       string
 
@@ -65,7 +66,8 @@ type cli struct {
 // newCLI creates a new CLI wrapper.
 // homeDir sets the HOME directory for pass-cli session storage.
 // When empty, it defaults to "/tmp".
-func newCLI(username, password, totpSecret, extraPassword, vault, homeDir string) *cli {
+// When pat is non-empty, login uses the Personal Access Token and ignores password/totpSecret/extraPassword.
+func newCLI(username, password, totpSecret, extraPassword, pat, vault, homeDir string) *cli {
 	if homeDir == "" {
 		homeDir = "/tmp"
 	}
@@ -74,6 +76,7 @@ func newCLI(username, password, totpSecret, extraPassword, vault, homeDir string
 		password:      password,
 		totpSecret:    totpSecret,
 		extraPassword: extraPassword,
+		pat:           pat,
 		vault:         vault,
 		homeDir:       homeDir,
 		itemCache:     make(map[string][]item),
@@ -117,23 +120,33 @@ func (c *cli) appendVaultFlag(args []string) []string {
 
 // login performs the login to Proton Pass.
 func (c *cli) login(ctx context.Context) error {
-	env := []string{
-		fmt.Sprintf("PROTON_PASS_PASSWORD=%s", c.password),
-	}
+	var env []string
+	args := []string{"login", "--interactive"}
 
-	if c.totpSecret != "" {
-		totpCode, err := generateTOTP(c.totpSecret)
-		if err != nil {
-			return fmt.Errorf("failed to generate TOTP code: %w", err)
+	if c.pat != "" {
+		env = append(env, fmt.Sprintf("PROTON_PASS_PERSONAL_ACCESS_TOKEN=%s", c.pat))
+		if c.username != "" {
+			args = append(args, c.username)
 		}
-		env = append(env, fmt.Sprintf("PROTON_PASS_TOTP=%s", totpCode))
+	} else {
+		env = append(env, fmt.Sprintf("PROTON_PASS_PASSWORD=%s", c.password))
+
+		if c.totpSecret != "" {
+			totpCode, err := generateTOTP(c.totpSecret)
+			if err != nil {
+				return fmt.Errorf("failed to generate TOTP code: %w", err)
+			}
+			env = append(env, fmt.Sprintf("PROTON_PASS_TOTP=%s", totpCode))
+		}
+
+		if c.extraPassword != "" {
+			env = append(env, fmt.Sprintf("PROTON_PASS_EXTRA_PASSWORD=%s", c.extraPassword))
+		}
+
+		args = append(args, c.username)
 	}
 
-	if c.extraPassword != "" {
-		env = append(env, fmt.Sprintf("PROTON_PASS_EXTRA_PASSWORD=%s", c.extraPassword))
-	}
-
-	_, err := c.runCommand(ctx, env, "login", "--interactive", c.username)
+	_, err := c.runCommand(ctx, env, args...)
 	if err != nil {
 		// pass-cli returns "Already authenticated" when a session already
 		// exists on disk. Treat this as success rather than an error.
@@ -251,12 +264,12 @@ func (c *cli) GetItem(ctx context.Context, itemID string) (*item, error) {
 		return nil, fmt.Errorf("failed to get item: %w", err)
 	}
 
-	var item item
-	if err := json.Unmarshal(output, &item); err != nil {
+	var response itemViewResponse
+	if err := json.Unmarshal(output, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse item details: %w", err)
 	}
 
-	return &item, nil
+	return &response.Item, nil
 }
 
 // ResolveItemID resolves an item name to its ID.
